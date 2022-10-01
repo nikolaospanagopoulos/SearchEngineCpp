@@ -9,7 +9,7 @@ int main() {
 
     Crawler *crawler = new Crawler;
 
-    crawler->getAllResults("https://www.zougla.gr/");
+    crawler->getAllResults("https://www.cnn.gr/");
 
     delete crawler;
 

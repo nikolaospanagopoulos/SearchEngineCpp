@@ -1,4 +1,5 @@
 #include "Crawler.hpp"
+#include <boost/regex.hpp>
 
 #include "CustomException.hpp"
 #include <cstddef>
@@ -8,13 +9,16 @@
 Crawler::Crawler() {
   response = new std::string{};
 
-  links = new std::set<std::string>{};
+  alreadyCrawled = new std::unordered_set<std::string>{};
+  links = new std::queue<std::string>{};
 }
 
 Crawler::~Crawler() {
   delete response;
   delete links;
+  delete alreadyCrawled;
   response = nullptr;
+  alreadyCrawled = nullptr;
   links = nullptr;
 }
 
@@ -59,7 +63,10 @@ size_t writeResponseToString(char *contents, size_t size, size_t nmemb,
 size_t (*callBackToWrite)(char *, size_t, size_t,
                           void *) = writeResponseToString;
 
-void Crawler::search_for_links(GumboNode *node) {
+void Crawler::saveRawLinks(std::string &website, GumboOutput *output) {
+  search_for_links(output->root, website);
+}
+void Crawler::search_for_links(GumboNode *node, const std::string &url) {
   if (node->type != GUMBO_NODE_ELEMENT) {
     return;
   }
@@ -67,19 +74,25 @@ void Crawler::search_for_links(GumboNode *node) {
   if (node->v.element.tag == GUMBO_TAG_A &&
       (href = gumbo_get_attribute(&node->v.element.attributes, "href"))) {
     std::string link = (std::string)href->value;
-    if (validLink(link)) {
-      links->insert(link);
+    makeLinkProper(link, url);
+    if (!existsInSet(link)) {
+      links->push(link);
+      alreadyCrawled->insert(link);
+      std::cout << link << std::endl;
     }
   }
 
   GumboVector *children = &node->v.element.children;
   for (unsigned int i = 0; i < children->length; ++i) {
-    search_for_links(static_cast<GumboNode *>(children->data[i]));
+    search_for_links(static_cast<GumboNode *>(children->data[i]), url);
   }
 }
 
 std::string *Crawler::crawlWebsite(const std::string website) {
 
+  if (!validLink(website)) {
+    throw CustomException((char *)"not a valid url");
+  }
   CURL *curl;
   CURLcode res{};
 
@@ -99,15 +112,55 @@ std::string *Crawler::crawlWebsite(const std::string website) {
 
   return response;
 }
-std::vector<std::string> *Crawler::getAllResults(std::string website) {
+void Crawler::getAllResults(std::string website, int depth) {
 
+  if (alreadyCrawled->size() > 400) {
+    return;
+  }
   std::string *res = crawlWebsite(website);
 
   GumboOutput *output = gumbo_parse(res->c_str());
-  search_for_links(output->root);
+  saveRawLinks(website, output);
 
-  for (auto &i : *links) {
-    std::cout << i << std::endl;
+  while (!links->empty()) {
+    std::string linkToParse = links->front();
+    alreadyCrawled->insert(linkToParse);
+    links->pop();
+
+    getAllResults(linkToParse, depth--);
   }
+
   gumbo_destroy_output(&kGumboDefaultOptions, output);
+}
+
+bool Crawler::existsInSet(const std::string &word) const {
+  for (auto &wordInSet : *alreadyCrawled) {
+    if (wordInSet == word) {
+      return true;
+    }
+  }
+  return false;
+}
+void Crawler::makeLinkProper(std::string &link, const std::string &url) {
+  boost::regex ex(
+      "(http|https)://([^/ :]+):?([^/ ]*)(/?[^ #?]*)\\x3f?([^ #]*)#?([^ ]*)");
+  boost::cmatch what;
+  if (!regex_match(url.c_str(), what, ex)) {
+    return;
+  }
+  std::string protocol{what[1].first, what[1].second};
+  std::string host{what[2].first, what[2].second};
+  std::string path{what[4].first, what[4].second};
+
+  if (link.substr(0, 2) == "//") {
+    link = protocol + ":" + link;
+  } else if (link.substr(0, 1) == "/") {
+    link = protocol + "://" + host + link;
+  } else if (link.substr(0, 2) == "./") {
+    link = protocol + "://" + host + path + link.substr(1);
+  } else if (link.substr(0, 2) == "../") {
+    link = protocol + "://" + host + "/" + link;
+  } else if (link.substr(0, 4) != "http") {
+    link = protocol + "://" + host + "/" + link;
+  }
 }
