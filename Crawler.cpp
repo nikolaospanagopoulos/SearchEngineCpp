@@ -1,4 +1,5 @@
 #include "Crawler.hpp"
+#include "exception"
 #include <boost/regex.hpp>
 
 #include "CustomException.hpp"
@@ -78,7 +79,6 @@ void Crawler::search_for_links(GumboNode *node, const std::string &url) {
     if (!existsInSet(link)) {
       links->push(link);
       alreadyCrawled->insert(link);
-      std::cout << link << std::endl;
     }
   }
 
@@ -86,6 +86,15 @@ void Crawler::search_for_links(GumboNode *node, const std::string &url) {
   for (unsigned int i = 0; i < children->length; ++i) {
     search_for_links(static_cast<GumboNode *>(children->data[i]), url);
   }
+}
+
+void Crawler::showResults() const {
+
+  for (const auto &res : *alreadyCrawled) {
+    std::cout << res << std::endl;
+  }
+
+  std::cout << "the size is: " << alreadyCrawled->size() << std::endl;
 }
 
 std::string *Crawler::crawlWebsite(const std::string website) {
@@ -112,25 +121,42 @@ std::string *Crawler::crawlWebsite(const std::string website) {
 
   return response;
 }
-void Crawler::getAllResults(std::string website, int depth) {
+void Crawler::getAllResults(std::string website) {
 
-  if (alreadyCrawled->size() > 400) {
-    return;
-  }
   std::string *res = crawlWebsite(website);
 
   GumboOutput *output = gumbo_parse(res->c_str());
-  saveRawLinks(website, output);
+  try {
+    saveRawLinks(website, output);
+    while (!links->empty()) {
+      std::string linkToParse = links->front();
+      alreadyCrawled->insert(linkToParse);
 
-  while (!links->empty()) {
-    std::string linkToParse = links->front();
-    alreadyCrawled->insert(linkToParse);
-    links->pop();
+      std::string title = (std::string)find_title(output->root);
+      std::string description = search_for_metatag(output->root, "description");
+      std::string keywords = search_for_metatag(output->root, "keywords");
+      links->pop();
 
-    getAllResults(linkToParse, depth--);
+      if (alreadyCrawled->size() > 300) {
+        break;
+      }
+      getAllResults(linkToParse);
+    }
+    gumbo_destroy_output(&kGumboDefaultOptions, output);
+
+  } catch (const std::runtime_error &re) {
+    gumbo_destroy_output(&kGumboDefaultOptions, output);
+    throw CustomException((char *)re.what());
+  } catch (CustomException &e) {
+    gumbo_destroy_output(&kGumboDefaultOptions, output);
+    throw CustomException((char *)e.what());
+  } catch (const std::exception &ex) {
+    gumbo_destroy_output(&kGumboDefaultOptions, output);
+    throw CustomException((char *)ex.what());
+  } catch (...) {
+    gumbo_destroy_output(&kGumboDefaultOptions, output);
+    throw CustomException((char *)"something went wrong");
   }
-
-  gumbo_destroy_output(&kGumboDefaultOptions, output);
 }
 
 bool Crawler::existsInSet(const std::string &word) const {
@@ -163,4 +189,79 @@ void Crawler::makeLinkProper(std::string &link, const std::string &url) {
   } else if (link.substr(0, 4) != "http") {
     link = protocol + "://" + host + "/" + link;
   }
+}
+
+GumboNode *Crawler::findHead(const GumboNode *root) {
+
+  if (root->type != GUMBO_NODE_ELEMENT) {
+    throw CustomException((char *)"not a valid element \n");
+  }
+  const GumboVector *root_children = &root->v.element.children;
+  GumboNode *head = NULL;
+  for (int i = 0; i < root_children->length; ++i) {
+    GumboNode *child = (GumboNode *)root_children->data[i];
+    if (child->type == GUMBO_NODE_ELEMENT &&
+        child->v.element.tag == GUMBO_TAG_HEAD) {
+      head = child;
+      break;
+    }
+  }
+
+  return head;
+}
+
+std::string Crawler::search_for_metatag(GumboNode *root, std::string tagType) {
+
+  GumboNode *head = findHead(root);
+
+  if (head == nullptr) {
+    throw CustomException((char *)"something went wrong");
+  }
+
+  std::string metaInfo{};
+  GumboAttribute *metaTagInfo;
+  GumboVector *head_children = &head->v.element.children;
+  for (int i = 0; i < head_children->length; ++i) {
+    GumboNode *child = (GumboNode *)head_children->data[i];
+    if (child->type == GUMBO_NODE_ELEMENT &&
+        child->v.element.tag == GUMBO_TAG_META) {
+      if ((metaTagInfo =
+               gumbo_get_attribute(&child->v.element.attributes, "name"))) {
+
+        if ((std::string)metaTagInfo->value == tagType) {
+
+          metaInfo = gumbo_get_attribute(
+
+                         &child->v.element.attributes, "content")
+                         ->value;
+        }
+      }
+    }
+  }
+  return metaInfo;
+}
+const char *Crawler::find_title(const GumboNode *root) {
+
+  GumboNode *head = findHead(root);
+
+  if (head == nullptr) {
+    throw CustomException((char *)"something went wrong");
+  }
+
+  GumboVector *head_children = &head->v.element.children;
+  for (int i = 0; i < head_children->length; ++i) {
+    GumboNode *child = (GumboNode *)head_children->data[i];
+    if (child->type == GUMBO_NODE_ELEMENT &&
+        child->v.element.tag == GUMBO_TAG_TITLE) {
+      if (child->v.element.children.length != 1) {
+        return "<empty title>";
+      }
+      GumboNode *title_text = (GumboNode *)child->v.element.children.data[0];
+
+      assert(title_text->type == GUMBO_NODE_TEXT ||
+             title_text->type == GUMBO_NODE_WHITESPACE);
+      return title_text->v.text.text;
+    }
+  }
+  return "<no title found>";
 }

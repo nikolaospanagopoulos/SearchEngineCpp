@@ -12,13 +12,17 @@ public:
   std::string *crawlWebsite(const std::string website);
   std::queue<std::string> *links;
   std::vector<std::string> results{};
-  void getAllResults(std::string website, int depth = 1);
+  void getAllResults(std::string website);
   std::string createLink(const std::string &website, std::string href);
+  void showResults() const;
 
   Crawler();
   ~Crawler();
 
 private:
+  GumboNode *findHead(const GumboNode *root);
+  std::string search_for_metatag(GumboNode *node, std::string tagType);
+  const char *find_title(const GumboNode *root);
   bool existsInSet(const std::string &word) const;
   void saveRawLinks(std::string &website, GumboOutput *output);
   std::unordered_set<std::string> *alreadyCrawled;
